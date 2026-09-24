@@ -1,10 +1,10 @@
-from typing import List, Optional
 import os
-from fastapi import FastAPI, HTTPException, Depends
-from sqlmodel import SQLModel, Field, Session, create_engine, select
-from pydantic import EmailStr
 from dotenv import load_dotenv
-import uvicorn
+from typing import List, Optional
+from fastapi import FastAPI, Depends, HTTPException
+from sqlmodel import SQLModel, Field, create_engine, Session, select
+from pydantic import EmailStr
+from contextlib import asynccontextmanager
 
 load_dotenv()
 
@@ -13,6 +13,10 @@ if not DATABASE_URL:
     raise ValueError("La variable de entorno DATABASE_URL no está definida.")
 
 engine = create_engine(DATABASE_URL, echo=True)
+
+def get_session():
+    with Session(engine) as session:
+        yield session
 
 class VehiculoBase(SQLModel):
     marca: str
@@ -54,42 +58,42 @@ class ClienteUpdate(SQLModel):
     licencia_conducir: Optional[str] = None
     telefono: Optional[str] = None
 
-def get_session():
-    with Session(engine) as session:
-        yield session
-
-app = FastAPI(title="Sistema de Gestión de Vehículos")
-
-@app.on_event("startup")
-def on_startup():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     SQLModel.metadata.create_all(engine)
+    yield
+
+app = FastAPI(
+    title="Sistema de Gestión de Vehículos", 
+    lifespan=lifespan
+)
 
 @app.post("/vehiculos/", response_model=Vehiculo, status_code=201)
-def create_vehiculo(vehiculo: VehiculoCreate, session: Session = Depends(get_session)):
-    db_vehiculo = Vehiculo.from_orm(vehiculo)
+def crear_vehiculo(vehiculo: VehiculoCreate, session: Session = Depends(get_session)):
+    db_vehiculo = Vehiculo.model_validate(vehiculo)
     session.add(db_vehiculo)
     session.commit()
     session.refresh(db_vehiculo)
     return db_vehiculo
 
 @app.get("/vehiculos/", response_model=List[Vehiculo])
-def read_vehiculos(session: Session = Depends(get_session)):
+def listar_vehiculos(session: Session = Depends(get_session)):
     return session.exec(select(Vehiculo)).all()
 
 @app.get("/vehiculos/{vehiculo_id}", response_model=Vehiculo)
-def read_vehiculo(vehiculo_id: int, session: Session = Depends(get_session)):
+def listar_vehiculo(vehiculo_id: int, session: Session = Depends(get_session)):
     vehiculo = session.get(Vehiculo, vehiculo_id)
     if not vehiculo:
         raise HTTPException(status_code=404, detail="Vehículo no encontrado")
     return vehiculo
 
 @app.put("/vehiculos/{vehiculo_id}", response_model=Vehiculo)
-def update_vehiculo(vehiculo_id: int, vehiculo_data: VehiculoUpdate, session: Session = Depends(get_session)):
+def actualizar_vehiculo(vehiculo_id: int, vehiculo_data: VehiculoUpdate, session: Session = Depends(get_session)):
     db_vehiculo = session.get(Vehiculo, vehiculo_id)
     if not db_vehiculo:
         raise HTTPException(status_code=404, detail="Vehículo no encontrado")
 
-    update_data = vehiculo_data.dict(exclude_unset=True)
+    update_data = vehiculo_data.model_dump(exclude_unset=True)
     for key, value in update_data.items():
         setattr(db_vehiculo, key, value)
 
@@ -99,7 +103,7 @@ def update_vehiculo(vehiculo_id: int, vehiculo_data: VehiculoUpdate, session: Se
     return db_vehiculo
 
 @app.delete("/vehiculos/{vehiculo_id}", status_code=204)
-def delete_vehiculo(vehiculo_id: int, session: Session = Depends(get_session)):
+def eliminar_vehiculo(vehiculo_id: int, session: Session = Depends(get_session)):
     vehiculo = session.get(Vehiculo, vehiculo_id)
     if not vehiculo:
         raise HTTPException(status_code=404, detail="Vehículo no encontrado")
@@ -108,31 +112,31 @@ def delete_vehiculo(vehiculo_id: int, session: Session = Depends(get_session)):
     return None
 
 @app.post("/clientes/", response_model=Cliente, status_code=201)
-def create_cliente(cliente: ClienteCreate, session: Session = Depends(get_session)):
-    db_cliente = Cliente.from_orm(cliente)
+def crear_cliente(cliente: ClienteCreate, session: Session = Depends(get_session)):
+    db_cliente = Cliente.model_validate(cliente)
     session.add(db_cliente)
     session.commit()
     session.refresh(db_cliente)
     return db_cliente
 
 @app.get("/clientes/", response_model=List[Cliente])
-def read_clientes(session: Session = Depends(get_session)):
+def listar_clientes(session: Session = Depends(get_session)):
     return session.exec(select(Cliente)).all()
 
 @app.get("/clientes/{cliente_id}", response_model=Cliente)
-def read_cliente(cliente_id: int, session: Session = Depends(get_session)):
+def listar_cliente(cliente_id: int, session: Session = Depends(get_session)):
     cliente = session.get(Cliente, cliente_id)
     if not cliente:
         raise HTTPException(status_code=404, detail="Cliente no encontrado")
     return cliente
 
 @app.put("/clientes/{cliente_id}", response_model=Cliente)
-def update_cliente(cliente_id: int, cliente_data: ClienteUpdate, session: Session = Depends(get_session)):
+def actualizar_cliente(cliente_id: int, cliente_data: ClienteUpdate, session: Session = Depends(get_session)):
     db_cliente = session.get(Cliente, cliente_id)
     if not db_cliente:
         raise HTTPException(status_code=404, detail="Cliente no encontrado")
 
-    update_data = cliente_data.dict(exclude_unset=True)
+    update_data = cliente_data.model_dump(exclude_unset=True)
     for key, value in update_data.items():
         setattr(db_cliente, key, value)
 
@@ -142,7 +146,7 @@ def update_cliente(cliente_id: int, cliente_data: ClienteUpdate, session: Sessio
     return db_cliente
 
 @app.delete("/clientes/{cliente_id}", status_code=204)
-def delete_cliente(cliente_id: int, session: Session = Depends(get_session)):
+def eliminar_cliente(cliente_id: int, session: Session = Depends(get_session)):
     cliente = session.get(Cliente, cliente_id)
     if not cliente:
         raise HTTPException(status_code=404, detail="Cliente no encontrado")
@@ -151,4 +155,5 @@ def delete_cliente(cliente_id: int, session: Session = Depends(get_session)):
     return None
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
